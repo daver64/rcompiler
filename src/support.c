@@ -4,6 +4,7 @@ int look=0;
 TokenType token_type = TOKEN_EOF;
 char token_text[1024] = {0};
 int token_num_value = 0;
+double token_float_value = 0.0;
 enum KeywordType token_keyword;
 
 static const char *source_buf = NULL;
@@ -27,6 +28,8 @@ Keyword keywords[] = {
     {"int", KEYWORD_INT},
     {"char", KEYWORD_CHAR},
     {"void", KEYWORD_VOID},
+    {"float", KEYWORD_FLOAT},
+    {"double", KEYWORD_DOUBLE},
     {"struct", KEYWORD_STRUCT},
     {"union", KEYWORD_UNION},
     {"enum", KEYWORD_ENUM},
@@ -290,12 +293,39 @@ char *c_read_number()
     }
     static char buffer[64];
     int i = 0;
+    int is_float = 0;
     while(c_is_digit())
     {
         buffer[i++] = look;
         c_get_next_char();
     }
+    if(look == '.' && (c_peek_char() >= '0' && c_peek_char() <= '9'))
+    {
+        is_float = 1;
+        buffer[i++] = look;
+        c_get_next_char();
+        while(c_is_digit())
+        {
+            buffer[i++] = look;
+            c_get_next_char();
+        }
+    }
+    if(look == 'f' || look == 'F')
+    {
+        is_float = 1;
+        c_get_next_char();
+    }
     buffer[i] = '\0';
+    if(is_float)
+    {
+        token_float_value = atof(buffer);
+        token_type = TOKEN_FLOAT_LITERAL;
+    }
+    else
+    {
+        token_num_value = atoi(buffer);
+        token_type = TOKEN_NUMBER;
+    }
     return buffer;
 }
 
@@ -370,8 +400,6 @@ void next_token()
     if(c_is_digit())
     {
         strcpy(token_text, c_read_number());
-        token_num_value = atoi(token_text);
-        token_type = TOKEN_NUMBER;
         return;
     }
     if(c_is_double_quote())

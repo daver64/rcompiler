@@ -45,6 +45,20 @@ Type *type_char()
     return t;
 }
 
+Type *type_float()
+{
+    static Type *t = NULL;
+    if(!t) t = type_new(TYPE_FLOAT);
+    return t;
+}
+
+Type *type_double()
+{
+    static Type *t = NULL;
+    if(!t) t = type_new(TYPE_DOUBLE);
+    return t;
+}
+
 Type *type_pointer_to(Type *base)
 {
     Type *t = type_new(TYPE_POINTER);
@@ -74,6 +88,8 @@ int type_size(Type *t)
         case TYPE_VOID: return 0;
         case TYPE_CHAR: return 1;
         case TYPE_INT: return 4;
+        case TYPE_FLOAT: return 4;
+        case TYPE_DOUBLE: return 8;
         case TYPE_POINTER: return 8;
         case TYPE_ARRAY: return type_size(t->base) * t->array_length;
         case TYPE_STRUCT: return t->struct_def->size;
@@ -88,6 +104,8 @@ int type_align(Type *t)
         case TYPE_VOID: return 1;
         case TYPE_CHAR: return 1;
         case TYPE_INT: return 4;
+        case TYPE_FLOAT: return 4;
+        case TYPE_DOUBLE: return 8;
         case TYPE_POINTER: return 8;
         case TYPE_ARRAY: return type_align(t->base);
         case TYPE_STRUCT: return t->struct_def->align;
@@ -214,6 +232,8 @@ static Symbol *symbol_new(char *name, Type *type, SymbolKind kind)
     s->kind = kind;
     s->offset = 0;
     s->scope_level = current_scope_level;
+    s->param_count = 0;
+    for(int i = 0; i < 6; i++) s->param_types[i] = NULL;
     s->next = symbol_head;
     symbol_head = s;
     return s;
@@ -227,6 +247,16 @@ Symbol *symtab_declare_global(char *name, Type *type)
 Symbol *symtab_declare_function(char *name, Type *return_type)
 {
     return symbol_new(name, return_type, SYM_FUNCTION);
+}
+
+void symtab_set_param_types(Symbol *sym, int count, Type **types)
+{
+    if(!sym) return;
+    sym->param_count = count > 6 ? 6 : count;
+    for(int i = 0; i < sym->param_count; i++)
+    {
+        sym->param_types[i] = types[i];
+    }
 }
 
 Symbol *symtab_declare_local(char *name, Type *type)

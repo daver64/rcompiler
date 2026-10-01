@@ -67,6 +67,55 @@ void codegen_emit_strings()
     }
 }
 
+typedef struct FloatLiteral {
+    char label[32];
+    double value;
+    int is_float32;
+    struct FloatLiteral *next;
+} FloatLiteral;
+
+static FloatLiteral *float_list = NULL;
+static FloatLiteral *float_list_tail = NULL;
+
+static const char *register_float_literal(double val, int is_float32)
+{
+    FloatLiteral *f = malloc(sizeof(FloatLiteral));
+    snprintf(f->label, sizeof(f->label), "flt_%d", codegen_new_label());
+    f->value = val;
+    f->is_float32 = is_float32;
+    f->next = NULL;
+    if(!float_list)
+    {
+        float_list = f;
+    }
+    else
+    {
+        float_list_tail->next = f;
+    }
+    float_list_tail = f;
+    return f->label;
+}
+
+void codegen_emit_floats()
+{
+    for(FloatLiteral *f = float_list; f; f = f->next)
+    {
+        if(f->is_float32)
+        {
+            float fval = (float)f->value;
+            unsigned int bits;
+            memcpy(&bits, &fval, sizeof(bits));
+            emit("%s: dd 0x%08x\n", f->label, bits);
+        }
+        else
+        {
+            unsigned long long bits;
+            memcpy(&bits, &f->value, sizeof(bits));
+            emit("%s: dq 0x%016llx\n", f->label, bits);
+        }
+    }
+}
+
 // Tracks which C-level function names got a body emitted vs. were only
 // called, so object-file mode can tell `public` from `extrn` symbols.
 typedef struct NameList {
@@ -134,8 +183,61 @@ static int is_op(const char *op)
     return token_type == TOKEN_OPERATOR && strcmp(token_text, op) == 0;
 }
 
+static int is_float_type(Type *t)
+{
+    return t && (t->kind == TYPE_FLOAT || t->kind == TYPE_DOUBLE);
+}
+
+// Converts value in accumulator (rax or xmm0) from from_type to to_type.
+static void gen_cast(Type *from_type, Type *to_type)
+{
+    if(!from_type || !to_type || from_type->kind == to_type->kind)
+    {
+        return;
+    }
+    int from_flt = is_float_type(from_type);
+    int to_flt = is_float_type(to_type);
+
+    if(!from_flt && to_flt)
+    {
+        // int -> double/float
+        if(to_type->kind == TYPE_FLOAT)
+        {
+            emit("    cvtsi2ss xmm0, rax\n");
+        }
+        else
+        {
+            emit("    cvtsi2sd xmm0, rax\n");
+        }
+    }
+    else if(from_flt && !to_flt)
+    {
+        // double/float -> int
+        if(from_type->kind == TYPE_FLOAT)
+        {
+            emit("    cvttss2si rax, xmm0\n");
+        }
+        else
+        {
+            emit("    cvttsd2si rax, xmm0\n");
+        }
+    }
+    else if(from_flt && to_flt)
+    {
+        // float <-> double
+        if(from_type->kind == TYPE_FLOAT && to_type->kind == TYPE_DOUBLE)
+        {
+            emit("    cvtss2sd xmm0, xmm0\n");
+        }
+        else if(from_type->kind == TYPE_DOUBLE && to_type->kind == TYPE_FLOAT)
+        {
+            emit("    cvtsd2ss xmm0, xmm0\n");
+        }
+    }
+}
+
 // If the result is currently an address, dereference it into a value (sized
-// per the type), sign-extended to fill rax.
+// per the type), into rax (integers/pointers) or xmm0 (floats).
 static void gen_load(ExprResult *r)
 {
     if(!r->is_lvalue)
@@ -147,39 +249,103 @@ static void gen_load(ExprResult *r)
         r->is_lvalue = 0; // arrays decay to their base address as a pointer value
         return;
     }
-    int size = type_size(r->type);
-    if(size == 1)
+    if(r->type->kind == TYPE_FLOAT)
     {
-        emit("    movsx eax, byte [rax]\n");
-        emit("    cdqe\n");
+        emit("    movss xmm0, dword [rax]\n");
     }
-    else if(size == 4)
+    else if(r->type->kind == TYPE_DOUBLE)
     {
-        emit("    mov eax, [rax]\n");
-        emit("    cdqe\n");
+        emit("    movsd xmm0, qword [rax]\n");
     }
     else
     {
-        emit("    mov rax, [rax]\n");
+        int size = type_size(r->type);
+        if(size == 1)
+        {
+            emit("    movsx eax, byte [rax]\n");
+            emit("    cdqe\n");
+        }
+        else if(size == 4)
+        {
+            emit("    mov eax, [rax]\n");
+            emit("    cdqe\n");
+        }
+        else
+        {
+            emit("    mov rax, [rax]\n");
+        }
     }
     r->is_lvalue = 0;
 }
 
-// Stores rax into the address held in addr_reg, sized per type.
+// Stores rax (integers) or xmm0 (floats) into the address held in addr_reg, sized per type.
 static void gen_store(Type *type, const char *addr_reg)
 {
-    int size = type_size(type);
-    if(size == 1)
+    if(type->kind == TYPE_FLOAT)
     {
-        emit("    mov byte [%s], al\n", addr_reg);
+        emit("    movss dword [%s], xmm0\n", addr_reg);
     }
-    else if(size == 4)
+    else if(type->kind == TYPE_DOUBLE)
     {
-        emit("    mov dword [%s], eax\n", addr_reg);
+        emit("    movsd qword [%s], xmm0\n", addr_reg);
     }
     else
     {
-        emit("    mov qword [%s], rax\n", addr_reg);
+        int size = type_size(type);
+        if(size == 1)
+        {
+            emit("    mov byte [%s], al\n", addr_reg);
+        }
+        else if(size == 4)
+        {
+            emit("    mov dword [%s], eax\n", addr_reg);
+        }
+        else
+        {
+            emit("    mov qword [%s], rax\n", addr_reg);
+        }
+    }
+}
+
+// Pushes the accumulator (rax or xmm0 depending on type) onto the stack.
+static void gen_push(Type *type)
+{
+    if(is_float_type(type))
+    {
+        emit("    sub rsp, 8\n");
+        if(type->kind == TYPE_FLOAT)
+        {
+            emit("    movss dword [rsp], xmm0\n");
+        }
+        else
+        {
+            emit("    movsd qword [rsp], xmm0\n");
+        }
+    }
+    else
+    {
+        emit("    push rax\n");
+    }
+}
+
+// Pops the stack into the primary accumulator (rax or xmm0 depending on type).
+static void gen_pop_to_first(Type *type)
+{
+    if(is_float_type(type))
+    {
+        if(type->kind == TYPE_FLOAT)
+        {
+            emit("    movss xmm0, dword [rsp]\n");
+        }
+        else
+        {
+            emit("    movsd xmm0, qword [rsp]\n");
+        }
+        emit("    add rsp, 8\n");
+    }
+    else
+    {
+        emit("    pop rax\n");
     }
 }
 
@@ -188,16 +354,25 @@ static ExprResult parse_logical_or();
 
 static ExprResult parse_call(char *name)
 {
-    static const char *arg_regs[] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};
+    static const char *gp_regs[] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};
+    static const char *xmm_regs[] = {"xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"};
     expect_op("(");
+    Symbol *fn = symtab_lookup(name);
     int argc = 0;
+    Type *arg_types[16];
     if(!is_op(")"))
     {
         while(TRUE)
         {
             ExprResult arg = parse_assignment();
             gen_load(&arg);
-            emit("    push rax\n");
+            if(fn && argc < fn->param_count && fn->param_types[argc])
+            {
+                gen_cast(arg.type, fn->param_types[argc]);
+                arg.type = fn->param_types[argc];
+            }
+            gen_push(arg.type);
+            arg_types[argc] = arg.type;
             argc++;
             if(argc > 6)
             {
@@ -212,16 +387,53 @@ static ExprResult parse_call(char *name)
         }
     }
     expect_op(")");
+
+    // Pop arguments off the stack into their corresponding System V ABI registers.
+    // Count how many floating point arguments are passed in XMM registers.
+    int fp_count = 0;
+    for(int i = 0; i < argc; i++)
+    {
+        if(is_float_type(arg_types[i]))
+        {
+            fp_count++;
+        }
+    }
+    int cur_gp = 0;
+    for(int i = 0; i < argc; i++)
+    {
+        if(!is_float_type(arg_types[i]))
+        {
+            cur_gp++;
+        }
+    }
+    int cur_fp = fp_count;
     for(int i = argc - 1; i >= 0; i--)
     {
-        emit("    pop %s\n", arg_regs[i]);
+        if(is_float_type(arg_types[i]))
+        {
+            cur_fp--;
+            const char *xreg = xmm_regs[cur_fp];
+            if(arg_types[i]->kind == TYPE_FLOAT)
+            {
+                emit("    movss %s, dword [rsp]\n", xreg);
+            }
+            else
+            {
+                emit("    movsd %s, qword [rsp]\n", xreg);
+            }
+            emit("    add rsp, 8\n");
+        }
+        else
+        {
+            cur_gp--;
+            emit("    pop %s\n", gp_regs[cur_gp]);
+        }
     }
-    emit("    xor eax, eax\n");
+    emit("    mov eax, %d\n", fp_count); // Sys V ABI: AL = number of vector registers for varargs
     emit("    call %s\n", asm_name(name));
     namelist_add(&called_functions, name);
 
     ExprResult r;
-    Symbol *fn = symtab_lookup(name);
     r.type = fn ? fn->type : type_int();
     r.is_lvalue = 0;
     return r;
@@ -230,6 +442,15 @@ static ExprResult parse_call(char *name)
 static ExprResult parse_primary()
 {
     ExprResult r;
+    if(token_type == TOKEN_FLOAT_LITERAL)
+    {
+        const char *label = register_float_literal(token_float_value, 0);
+        emit("    movsd xmm0, [%s]\n", label);
+        r.type = type_double();
+        r.is_lvalue = 0;
+        next_token();
+        return r;
+    }
     if(token_type == TOKEN_NUMBER)
     {
         emit("    mov rax, %d\n", token_num_value);
@@ -391,7 +612,25 @@ static ExprResult parse_unary()
         next_token();
         r = parse_unary();
         gen_load(&r);
-        emit("    neg rax\n");
+        if(is_float_type(r.type))
+        {
+            if(r.type->kind == TYPE_FLOAT)
+            {
+                const char *lbl = register_float_literal(-0.0, 1);
+                emit("    movss xmm1, [%s]\n", lbl);
+                emit("    xorps xmm0, xmm1\n");
+            }
+            else
+            {
+                const char *lbl = register_float_literal(-0.0, 0);
+                emit("    movsd xmm1, [%s]\n", lbl);
+                emit("    xorpd xmm0, xmm1\n");
+            }
+        }
+        else
+        {
+            emit("    neg rax\n");
+        }
         r.is_lvalue = 0;
         return r;
     }
@@ -400,9 +639,27 @@ static ExprResult parse_unary()
         next_token();
         r = parse_unary();
         gen_load(&r);
-        emit("    cmp rax, 0\n");
-        emit("    sete al\n");
-        emit("    movzx rax, al\n");
+        if(is_float_type(r.type))
+        {
+            if(r.type->kind == TYPE_FLOAT)
+            {
+                emit("    xorps xmm1, xmm1\n");
+                emit("    ucomiss xmm0, xmm1\n");
+            }
+            else
+            {
+                emit("    xorpd xmm1, xmm1\n");
+                emit("    ucomisd xmm0, xmm1\n");
+            }
+            emit("    sete al\n");
+            emit("    movzx rax, al\n");
+        }
+        else
+        {
+            emit("    cmp rax, 0\n");
+            emit("    sete al\n");
+            emit("    movzx rax, al\n");
+        }
         r.type = type_int();
         r.is_lvalue = 0;
         return r;
@@ -443,32 +700,61 @@ static ExprResult parse_multiplicative()
         char op = token_text[0];
         next_token();
         gen_load(&l);
-        emit("    push rax\n");
+        gen_push(l.type);
         ExprResult r = parse_unary();
         gen_load(&r);
-        emit("    mov rcx, rax\n");
-        emit("    pop rax\n");
-        if(op == '*')
+
+        int l_flt = is_float_type(l.type);
+        int r_flt = is_float_type(r.type);
+
+        if(l_flt || r_flt)
         {
-            emit("    imul rax, rcx\n");
+            if(op == '%')
+            {
+                codegen_error("modulo operator '%%' not supported for floating point types");
+            }
+            Type *res_type = (l.type->kind == TYPE_DOUBLE || r.type->kind == TYPE_DOUBLE) ? type_double() : type_float();
+            gen_cast(r.type, res_type);
+            emit("    movapd xmm1, xmm0\n"); // xmm1 = RHS
+            gen_pop_to_first(l.type);
+            gen_cast(l.type, res_type);   // xmm0 = LHS
+
+            if(res_type->kind == TYPE_FLOAT)
+            {
+                emit(op == '*' ? "    mulss xmm0, xmm1\n" : "    divss xmm0, xmm1\n");
+            }
+            else
+            {
+                emit(op == '*' ? "    mulsd xmm0, xmm1\n" : "    divsd xmm0, xmm1\n");
+            }
+            l.type = res_type;
         }
         else
         {
-            emit("    cqo\n");
-            emit("    idiv rcx\n");
-            if(op == '%')
+            emit("    mov rcx, rax\n"); // rcx = RHS
+            gen_pop_to_first(l.type);   // rax = LHS
+            if(op == '*')
             {
-                emit("    mov rax, rdx\n");
+                emit("    imul rax, rcx\n");
             }
+            else
+            {
+                emit("    cqo\n");
+                emit("    idiv rcx\n");
+                if(op == '%')
+                {
+                    emit("    mov rax, rdx\n");
+                }
+            }
+            l.type = type_int();
         }
-        l.type = type_int();
         l.is_lvalue = 0;
     }
     return l;
 }
 
 // Handles pointer-scaled +/- (ptr+int, int+ptr, ptr-int, ptr-ptr) alongside
-// plain integer arithmetic; arrays behave as pointers here (see gen_load).
+// floating-point and plain integer arithmetic; arrays behave as pointers here (see gen_load).
 static ExprResult parse_additive()
 {
     ExprResult l = parse_multiplicative();
@@ -478,18 +764,38 @@ static ExprResult parse_additive()
         next_token();
         gen_load(&l);
         Type *l_type = l.type;
-        emit("    push rax\n");
+        gen_push(l_type);
         ExprResult r = parse_multiplicative();
         gen_load(&r);
         Type *r_type = r.type;
-        emit("    mov rcx, rax\n"); // rcx = right operand
-        emit("    pop rax\n");      // rax = left operand
 
         int l_is_ptr = l_type->kind == TYPE_POINTER || l_type->kind == TYPE_ARRAY;
         int r_is_ptr = r_type->kind == TYPE_POINTER || r_type->kind == TYPE_ARRAY;
+        int l_flt = is_float_type(l_type);
+        int r_flt = is_float_type(r_type);
 
-        if(l_is_ptr && r_is_ptr)
+        if(l_flt || r_flt)
         {
+            Type *res_type = (l_type->kind == TYPE_DOUBLE || r_type->kind == TYPE_DOUBLE) ? type_double() : type_float();
+            gen_cast(r_type, res_type);
+            emit("    movapd xmm1, xmm0\n"); // xmm1 = RHS
+            gen_pop_to_first(l_type);
+            gen_cast(l_type, res_type);   // xmm0 = LHS
+
+            if(res_type->kind == TYPE_FLOAT)
+            {
+                emit(op == '+' ? "    addss xmm0, xmm1\n" : "    subss xmm0, xmm1\n");
+            }
+            else
+            {
+                emit(op == '+' ? "    addsd xmm0, xmm1\n" : "    subsd xmm0, xmm1\n");
+            }
+            l.type = res_type;
+        }
+        else if(l_is_ptr && r_is_ptr)
+        {
+            emit("    mov rcx, rax\n"); // rcx = right operand
+            gen_pop_to_first(l_type);   // rax = left operand
             if(op != '-')
             {
                 codegen_error("cannot add two pointers");
@@ -503,6 +809,8 @@ static ExprResult parse_additive()
         }
         else if(l_is_ptr)
         {
+            emit("    mov rcx, rax\n"); // rcx = right operand
+            gen_pop_to_first(l_type);   // rax = left operand
             int elem_size = type_size(l_type->base);
             emit("    imul rcx, rcx, %d\n", elem_size);
             emit(op == '+' ? "    add rax, rcx\n" : "    sub rax, rcx\n");
@@ -510,6 +818,8 @@ static ExprResult parse_additive()
         }
         else if(r_is_ptr)
         {
+            emit("    mov rcx, rax\n"); // rcx = right operand
+            gen_pop_to_first(l_type);   // rax = left operand
             if(op != '+')
             {
                 codegen_error("cannot subtract a pointer from an integer");
@@ -521,6 +831,8 @@ static ExprResult parse_additive()
         }
         else
         {
+            emit("    mov rcx, rax\n"); // rcx = right operand
+            gen_pop_to_first(l_type);   // rax = left operand
             emit(op == '+' ? "    add rax, rcx\n" : "    sub rax, rcx\n");
             l.type = type_int();
         }
@@ -538,17 +850,48 @@ static ExprResult parse_relational()
         strcpy(op, token_text);
         next_token();
         gen_load(&l);
-        emit("    push rax\n");
+        Type *l_type = l.type;
+        gen_push(l_type);
         ExprResult r = parse_additive();
         gen_load(&r);
-        emit("    mov rcx, rax\n");
-        emit("    pop rax\n");
-        emit("    cmp rax, rcx\n");
-        if(strcmp(op, "<") == 0) emit("    setl al\n");
-        else if(strcmp(op, ">") == 0) emit("    setg al\n");
-        else if(strcmp(op, "<=") == 0) emit("    setle al\n");
-        else emit("    setge al\n");
-        emit("    movzx rax, al\n");
+        Type *r_type = r.type;
+
+        int l_flt = is_float_type(l_type);
+        int r_flt = is_float_type(r_type);
+
+        if(l_flt || r_flt)
+        {
+            Type *cmp_type = (l_type->kind == TYPE_DOUBLE || r_type->kind == TYPE_DOUBLE) ? type_double() : type_float();
+            gen_cast(r_type, cmp_type);
+            emit("    movapd xmm1, xmm0\n"); // xmm1 = RHS
+            gen_pop_to_first(l_type);
+            gen_cast(l_type, cmp_type);   // xmm0 = LHS
+
+            if(cmp_type->kind == TYPE_FLOAT)
+            {
+                emit("    ucomiss xmm0, xmm1\n");
+            }
+            else
+            {
+                emit("    ucomisd xmm0, xmm1\n");
+            }
+            if(strcmp(op, "<") == 0) emit("    setb al\n");
+            else if(strcmp(op, ">") == 0) emit("    seta al\n");
+            else if(strcmp(op, "<=") == 0) emit("    setbe al\n");
+            else emit("    setae al\n");
+            emit("    movzx rax, al\n");
+        }
+        else
+        {
+            emit("    mov rcx, rax\n"); // rcx = RHS
+            gen_pop_to_first(l_type);   // rax = LHS
+            emit("    cmp rax, rcx\n");
+            if(strcmp(op, "<") == 0) emit("    setl al\n");
+            else if(strcmp(op, ">") == 0) emit("    setg al\n");
+            else if(strcmp(op, "<=") == 0) emit("    setle al\n");
+            else emit("    setge al\n");
+            emit("    movzx rax, al\n");
+        }
         l.type = type_int();
         l.is_lvalue = 0;
     }
@@ -563,14 +906,42 @@ static ExprResult parse_equality()
         int is_eq = is_op("==");
         next_token();
         gen_load(&l);
-        emit("    push rax\n");
+        Type *l_type = l.type;
+        gen_push(l_type);
         ExprResult r = parse_relational();
         gen_load(&r);
-        emit("    mov rcx, rax\n");
-        emit("    pop rax\n");
-        emit("    cmp rax, rcx\n");
-        emit(is_eq ? "    sete al\n" : "    setne al\n");
-        emit("    movzx rax, al\n");
+        Type *r_type = r.type;
+
+        int l_flt = is_float_type(l_type);
+        int r_flt = is_float_type(r_type);
+
+        if(l_flt || r_flt)
+        {
+            Type *cmp_type = (l_type->kind == TYPE_DOUBLE || r_type->kind == TYPE_DOUBLE) ? type_double() : type_float();
+            gen_cast(r_type, cmp_type);
+            emit("    movapd xmm1, xmm0\n"); // xmm1 = RHS
+            gen_pop_to_first(l_type);
+            gen_cast(l_type, cmp_type);   // xmm0 = LHS
+
+            if(cmp_type->kind == TYPE_FLOAT)
+            {
+                emit("    ucomiss xmm0, xmm1\n");
+            }
+            else
+            {
+                emit("    ucomisd xmm0, xmm1\n");
+            }
+            emit(is_eq ? "    sete al\n" : "    setne al\n");
+            emit("    movzx rax, al\n");
+        }
+        else
+        {
+            emit("    mov rcx, rax\n");
+            gen_pop_to_first(l_type);
+            emit("    cmp rax, rcx\n");
+            emit(is_eq ? "    sete al\n" : "    setne al\n");
+            emit("    movzx rax, al\n");
+        }
         l.type = type_int();
         l.is_lvalue = 0;
     }
@@ -643,6 +1014,7 @@ static ExprResult parse_assignment()
         emit("    push rax\n"); // save destination address
         ExprResult r = parse_assignment(); // right-associative
         gen_load(&r);
+        gen_cast(r.type, dest_type);
         emit("    pop rcx\n");
         gen_store(dest_type, "rcx");
         l.type = dest_type;
@@ -660,10 +1032,16 @@ ExprResult parse_expr()
 // ---- Phase 4: statements & control flow ----
 
 static int current_return_label = -1;
+static Type *current_return_type = NULL;
 
 void codegen_set_return_label(int label)
 {
     current_return_label = label;
+}
+
+void codegen_set_return_type(Type *type)
+{
+    current_return_type = type;
 }
 
 typedef struct LoopLabels {
@@ -694,6 +1072,7 @@ static int is_type_start()
 {
     return token_type == TOKEN_KEYWORD &&
         (token_keyword == KEYWORD_INT || token_keyword == KEYWORD_CHAR ||
+         token_keyword == KEYWORD_FLOAT || token_keyword == KEYWORD_DOUBLE ||
          token_keyword == KEYWORD_VOID || token_keyword == KEYWORD_STRUCT);
 }
 
@@ -714,6 +1093,16 @@ static Type *parse_base_type()
     {
         next_token();
         return type_char();
+    }
+    if(token_keyword == KEYWORD_FLOAT)
+    {
+        next_token();
+        return type_float();
+    }
+    if(token_keyword == KEYWORD_DOUBLE)
+    {
+        next_token();
+        return type_double();
     }
     if(token_keyword == KEYWORD_VOID)
     {
@@ -825,6 +1214,7 @@ static void parse_declaration()
             emit("    push rax\n");
             ExprResult r = parse_expr();
             gen_load(&r);
+            gen_cast(r.type, t);
             emit("    pop rcx\n");
             gen_store(t, "rcx");
         }
@@ -1009,6 +1399,10 @@ void parse_statement()
         {
             ExprResult r = parse_expr();
             gen_load(&r);
+            if(current_return_type)
+            {
+                gen_cast(r.type, current_return_type);
+            }
         }
         else
         {
@@ -1186,9 +1580,14 @@ static void parse_function(char *name, Type *return_type)
     static const char *reg64[] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};
     static const char *reg32[] = {"edi", "esi", "edx", "ecx", "r8d", "r9d"};
     static const char *reg8[]  = {"dil", "sil", "dl", "cl", "r8b", "r9b"};
+    static const char *xmm_regs[] = {"xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"};
 
     expect_op("(");
-    symtab_declare_function(name, return_type);
+    Symbol *fn_sym = symtab_lookup(name);
+    if(!fn_sym)
+    {
+        fn_sym = symtab_declare_function(name, return_type);
+    }
 
     char param_names[6][64];
     Type *param_types[6];
@@ -1224,6 +1623,7 @@ static void parse_function(char *name, Type *return_type)
         }
     }
     expect_op(")");
+    symtab_set_param_types(fn_sym, param_count, param_types);
 
     if(is_op(";"))
     {
@@ -1240,6 +1640,7 @@ static void parse_function(char *name, Type *return_type)
 
     int epilogue_label = codegen_new_label();
     codegen_set_return_label(epilogue_label);
+    codegen_set_return_type(return_type);
 
     // The body is parsed/generated before the prologue so the final stack
     // frame size (which depends on locals declared inside it) is known.
@@ -1253,12 +1654,30 @@ static void parse_function(char *name, Type *return_type)
     {
         emit("    sub rsp, %d\n", frame_size);
     }
+    int gp_idx = 0;
+    int fp_idx = 0;
     for(int i = 0; i < param_count; i++)
     {
-        int size = type_size(param_types[i]);
-        const char *reg = size == 1 ? reg8[i] : (size == 4 ? reg32[i] : reg64[i]);
-        const char *width = size == 1 ? "byte" : (size == 4 ? "dword" : "qword");
-        emit("    mov %s [rbp%d], %s\n", width, param_syms[i]->offset, reg);
+        if(is_float_type(param_types[i]))
+        {
+            const char *xreg = xmm_regs[fp_idx++];
+            if(param_types[i]->kind == TYPE_FLOAT)
+            {
+                emit("    movss dword [rbp%d], %s\n", param_syms[i]->offset, xreg);
+            }
+            else
+            {
+                emit("    movsd qword [rbp%d], %s\n", param_syms[i]->offset, xreg);
+            }
+        }
+        else
+        {
+            int size = type_size(param_types[i]);
+            const char *reg = size == 1 ? reg8[gp_idx] : (size == 4 ? reg32[gp_idx] : reg64[gp_idx]);
+            const char *width = size == 1 ? "byte" : (size == 4 ? "dword" : "qword");
+            emit("    mov %s [rbp%d], %s\n", width, param_syms[i]->offset, reg);
+            gp_idx++;
+        }
     }
     emit("%s", body_code);
     free(body_code);

@@ -18,6 +18,8 @@ enum KeywordType {
     KEYWORD_INT,
     KEYWORD_CHAR,
     KEYWORD_VOID,
+    KEYWORD_FLOAT,
+    KEYWORD_DOUBLE,
     KEYWORD_STRUCT,
     KEYWORD_UNION,
     KEYWORD_ENUM,
@@ -45,6 +47,7 @@ typedef enum {
     TOKEN_KEYWORD,
     TOKEN_IDENTIFIER,
     TOKEN_NUMBER,
+    TOKEN_FLOAT_LITERAL,
     TOKEN_STRING,
     TOKEN_CHAR,
     TOKEN_OPERATOR
@@ -53,6 +56,7 @@ typedef enum {
 extern TokenType token_type;
 extern char token_text[1024];
 extern int token_num_value;
+extern double token_float_value;
 extern enum KeywordType token_keyword;
 
 // Points the lexer at an in-memory, null-terminated source buffer (the

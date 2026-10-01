@@ -40,4 +40,7 @@ void codegen_emit_linkage(int object_mode);
 // (as byte lists) by codegen_emit_strings(), called alongside codegen_emit_globals().
 void codegen_emit_strings();
 
+// Floating point constants emitted as IEEE-754 bit representations.
+void codegen_emit_floats();
+
 

@@ -63,6 +63,89 @@ static void emit_runtime_prelude(FILE *out)
     fprintf(out, "    pop rbx\n");
     fprintf(out, "    mov rax, 0\n");
     fprintf(out, "    ret\n\n");
+
+    fprintf(out, "u_print_float:\n");
+    fprintf(out, "    cvtss2sd xmm0, xmm0\n");
+    fprintf(out, "u_print_double:\n");
+    fprintf(out, "    push rbx\n");
+    fprintf(out, "    push r12\n");
+    fprintf(out, "    push r13\n");
+    fprintf(out, "    push r14\n");
+    fprintf(out, "    xor r12, r12\n");
+    fprintf(out, "    xorpd xmm1, xmm1\n");
+    fprintf(out, "    ucomisd xmm1, xmm0\n");
+    fprintf(out, "    jbe .u_pfp_not_neg\n");
+    fprintf(out, "    subsd xmm1, xmm0\n");
+    fprintf(out, "    movapd xmm0, xmm1\n");
+    fprintf(out, "    mov r12, 1\n");
+    fprintf(out, ".u_pfp_not_neg:\n");
+    fprintf(out, "    addsd xmm0, [flt_round]\n");
+    fprintf(out, "    cvttsd2si r13, xmm0\n");
+    fprintf(out, "    cvtsi2sd xmm1, r13\n");
+    fprintf(out, "    subsd xmm0, xmm1\n");
+    fprintf(out, "    lea rbx, [print_float_buf]\n");
+    fprintf(out, "    cmp r12, 0\n");
+    fprintf(out, "    je .u_pfp_no_minus\n");
+    fprintf(out, "    mov byte [rbx], '-'\n");
+    fprintf(out, "    inc rbx\n");
+    fprintf(out, ".u_pfp_no_minus:\n");
+    fprintf(out, "    mov rax, r13\n");
+    fprintf(out, "    lea rcx, [print_int_buf+23]\n");
+    fprintf(out, "    mov byte [rcx], 0\n");
+    fprintf(out, "    mov r14, 10\n");
+    fprintf(out, ".u_pfp_int_loop:\n");
+    fprintf(out, "    xor rdx, rdx\n");
+    fprintf(out, "    div r14\n");
+    fprintf(out, "    add dl, '0'\n");
+    fprintf(out, "    dec rcx\n");
+    fprintf(out, "    mov [rcx], dl\n");
+    fprintf(out, "    test rax, rax\n");
+    fprintf(out, "    jnz .u_pfp_int_loop\n");
+    fprintf(out, ".u_pfp_copy_int:\n");
+    fprintf(out, "    cmp byte [rcx], 0\n");
+    fprintf(out, "    je .u_pfp_int_done\n");
+    fprintf(out, "    mov al, [rcx]\n");
+    fprintf(out, "    mov [rbx], al\n");
+    fprintf(out, "    inc rbx\n");
+    fprintf(out, "    inc rcx\n");
+    fprintf(out, "    jmp .u_pfp_copy_int\n");
+    fprintf(out, ".u_pfp_int_done:\n");
+    fprintf(out, "    mov byte [rbx], '.'\n");
+    fprintf(out, "    inc rbx\n");
+    fprintf(out, "    mov r14, 6\n");
+    fprintf(out, ".u_pfp_frac_loop:\n");
+    fprintf(out, "    mulsd xmm0, [flt_ten]\n");
+    fprintf(out, "    cvttsd2si rax, xmm0\n");
+    fprintf(out, "    add al, '0'\n");
+    fprintf(out, "    mov [rbx], al\n");
+    fprintf(out, "    inc rbx\n");
+    fprintf(out, "    cvttsd2si rax, xmm0\n");
+    fprintf(out, "    cvtsi2sd xmm1, rax\n");
+    fprintf(out, "    subsd xmm0, xmm1\n");
+    fprintf(out, "    dec r14\n");
+    fprintf(out, "    jnz .u_pfp_frac_loop\n");
+    fprintf(out, ".u_pfp_trim_loop:\n");
+    fprintf(out, "    cmp byte [rbx-1], '0'\n");
+    fprintf(out, "    jne .u_pfp_trim_done\n");
+    fprintf(out, "    cmp byte [rbx-2], '.'\n");
+    fprintf(out, "    je .u_pfp_trim_done\n");
+    fprintf(out, "    dec rbx\n");
+    fprintf(out, "    jmp .u_pfp_trim_loop\n");
+    fprintf(out, ".u_pfp_trim_done:\n");
+    fprintf(out, "    mov byte [rbx], 0\n");
+    fprintf(out, "    lea rdx, [print_float_buf]\n");
+    fprintf(out, "    sub rbx, rdx\n");
+    fprintf(out, "    mov rdx, rbx\n");
+    fprintf(out, "    lea rsi, [print_float_buf]\n");
+    fprintf(out, "    mov rax, 1\n");
+    fprintf(out, "    mov rdi, 1\n");
+    fprintf(out, "    syscall\n");
+    fprintf(out, "    pop r14\n");
+    fprintf(out, "    pop r13\n");
+    fprintf(out, "    pop r12\n");
+    fprintf(out, "    pop rbx\n");
+    fprintf(out, "    mov rax, 0\n");
+    fprintf(out, "    ret\n\n");
 }
 
 static void usage(const char *prog)
@@ -119,8 +202,14 @@ int main(int argc, char *argv[])
     FILE *body_buf = open_memstream(&body_code, &body_size);
     codegen_init(body_buf);
     symtab_init();
-    symtab_declare_function("print", type_int());
-    symtab_declare_function("print_int", type_int());
+    Type *p_str = type_pointer_to(type_char());
+    Type *p_int = type_int();
+    Type *p_flt = type_float();
+    Type *p_dbl = type_double();
+    symtab_set_param_types(symtab_declare_function("print", type_int()), 1, &p_str);
+    symtab_set_param_types(symtab_declare_function("print_int", type_int()), 1, &p_int);
+    symtab_set_param_types(symtab_declare_function("print_float", type_int()), 1, &p_flt);
+    symtab_set_param_types(symtab_declare_function("print_double", type_int()), 1, &p_dbl);
 
     lexer_set_source(preprocessed);
     next_token();
@@ -173,9 +262,13 @@ int main(int argc, char *argv[])
     fprintf(out, object_mode ? "\nsection '.data' writeable\n\n" : "\nsegment readable writeable\n\n");
     codegen_emit_globals();
     codegen_emit_strings();
+    codegen_emit_floats();
     if(!object_mode)
     {
         fprintf(out, "print_int_buf: rb 24\n");
+        fprintf(out, "print_float_buf: rb 64\n");
+        fprintf(out, "flt_ten: dq 10.0\n");
+        fprintf(out, "flt_round: dq 0.0000005\n");
     }
     if(object_mode)
     {

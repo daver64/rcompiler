@@ -1,12 +1,25 @@
 // example.c - a tour of every feature this compiler currently supports.
-// Build & run:
+// Build & run as standalone executable:
 //   make && ./compile examples/example.c -o example.elf && ./example.elf
 //
-// This program doesn't rely on its exit code for correctness (though it does
-// return one) - it prints as it goes via the builtin print()/print_int(),
-// since strings + a tiny syscall-based runtime are supported (Phase 7).
+// Demonstrates:
+// - Preprocessor (#define macros, recursive expansion)
+// - Forward declarations / function prototypes
+// - Functions, recursion, System V calling convention
+// - Control flow: if / else, while, for, break, continue
+// - Floating point: float & double, arithmetic, comparisons, int casts
+// - Pointers & arrays: indexing, address-of (&), dereference (*), pointer arithmetic
+// - Structs: declaration, member access (.), pointer access (->)
+// - Globals: initialized & zero-initialized
+// - String literals with escape sequences
+// - Builtin runtime: print(), print_int(), print_float(), print_double()
+
+#define APP_TITLE "== rcompiler feature tour ==\n"
+#define PI_APPROX 3.14159
+#define CIRCLE_RADIUS 2.0
 
 int add(int a, int b);          // forward declaration (prototype)
+double circle_area(double radius);
 
 struct Point {
     int x;
@@ -78,9 +91,21 @@ int manhattan_distance(struct Point *p) {
     return p->x + p->y;
 }
 
+// --- floating point calculations ---
+
+double circle_area(double radius) {
+    return PI_APPROX * radius * radius;
+}
+
+float average3(float a, float b, float c) {
+    return (a + b + c) / 3.0;
+}
+
 // --- entry point ---
 
 int main() {
+    print(APP_TITLE);
+
     print("== functions & recursion ==\n");
     print_int(add(3, 4));
     print("\n");
@@ -92,6 +117,26 @@ int main() {
     print("\n");
     print_int(count_even_below(20)); // stops early via break
     print("\n");
+
+    print("== floating point (float & double) ==\n");
+    double area = circle_area(CIRCLE_RADIUS); // 3.14159 * 2 * 2 = 12.56636
+    print("circle area: ");
+    print_double(area);
+    print("\n");
+
+    float f1 = 10.5;
+    float f2 = 20.25;
+    float f3 = 30.75;
+    float avg = average3(f1, f2, f3); // (10.5 + 20.25 + 30.75) / 3 = 20.5
+    print("average: ");
+    print_float(avg);
+    print("\n");
+
+    if (area > 12.0 && area < 13.0) {
+        print("fp comparison: OK\n");
+    } else {
+        print("fp comparison: FAIL\n");
+    }
 
     print("== arrays & pointers ==\n");
     int nums[5];

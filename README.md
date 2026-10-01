@@ -16,14 +16,14 @@ all the way down to a runnable ELF binary.
 - Targets **x86-64 Linux** (and portable to other x86-64 environments),
   emitting Intel-syntax assembly for **FASM 1.7x**, which is then invoked to
   produce a standalone ELF executable or a relocatable object file (`.o`).
-- A genuinely useful subset of C: functions (with recursion), `int`/`char`
+- A genuinely useful subset of C: functions (with recursion), `int`/`char`/`float`/`double`
   types, pointers, arrays, structs, global variables, `if`/`else`/`while`/
   `for`/`break`/`continue`/`return`, string literals, and a simple
   preprocessor (`#include`, `#define`).
 - Object files (`-c`) are standard ELF64 with proper symbol aliasing and PLT
   calls, making them linkable with standard `gcc` (PIE-compatible) or custom OS linkers.
-- It is **not** a standards-compliant C compiler. There's no floating point,
-  no `union`/`enum`/`typedef`, no function-like macros or conditional
+- It is **not** a standards-compliant C compiler. There's no
+  `union`/`enum`/`typedef`, no function-like macros or conditional
   compilation (`#ifdef`), no bitfields, and struct-by-value passing is only
   correct for structs up to 8 bytes. See [Limitations](#limitations).
 
@@ -94,13 +94,15 @@ with libc.
 
 ### Builtin runtime
 
-There's no libc. Two tiny syscall-based builtins are always available to your
+There's no libc. Four tiny syscall-based builtins are always available to your
 C code, implemented directly in hand-written asm and bundled into every
 standalone executable:
 
 ```c
 int print(char *s);       // writes a null-terminated string to stdout
 int print_int(int n);     // writes a (possibly negative) decimal integer
+int print_float(float f); // writes a 32-bit float
+int print_double(double d); // writes a 64-bit double
 ```
 
 ### Preprocessor
@@ -162,9 +164,9 @@ This is intentionally a small subset of C. Notably missing:
   built-in raw syscall `print`/`print_int` functions). For libc access, compile
   to an object file (`-c`) and link with `gcc` or your target OS libc.
 - No `union`, `enum`, or `typedef`.
-- No floating point, no variadic functions, no bitfields.
-- Function calls support at most 6 arguments (SysV register-only convention,
-  no stack-passed arguments).
+- No variadic functions, no bitfields.
+- Function calls support at most 6 integer/pointer arguments and 8 float arguments
+  (SysV register convention).
 - No function-like macros or conditional compilation (`#ifdef`) in the preprocessor.
 - Struct-by-value parameter/return passing is only correct for structs that
   fit in 8 bytes (pass structs by pointer for larger structs).

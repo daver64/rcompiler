@@ -6,6 +6,8 @@ typedef enum {
     TYPE_VOID,
     TYPE_INT,
     TYPE_CHAR,
+    TYPE_FLOAT,
+    TYPE_DOUBLE,
     TYPE_POINTER,
     TYPE_ARRAY,
     TYPE_STRUCT
@@ -46,6 +48,8 @@ typedef struct Symbol {
     SymbolKind kind;
     int offset;        // stack offset (rbp-relative, negative) for locals/params
     int scope_level;
+    int param_count;
+    Type *param_types[6];
     struct Symbol *next;
 } Symbol;
 
@@ -53,6 +57,8 @@ typedef struct Symbol {
 Type *type_void();
 Type *type_int();
 Type *type_char();
+Type *type_float();
+Type *type_double();
 Type *type_pointer_to(Type *base);
 Type *type_array_of(Type *base, int length);
 Type *type_struct(StructDef *def);
@@ -74,6 +80,7 @@ void symtab_begin_function();     // resets the local stack-frame offset counter
 int symtab_frame_size();          // bytes needed for locals/params of current function
 Symbol *symtab_declare_global(char *name, Type *type);
 Symbol *symtab_declare_function(char *name, Type *return_type);
+void symtab_set_param_types(Symbol *sym, int count, Type **types);
 Symbol *symtab_declare_local(char *name, Type *type);
 Symbol *symtab_declare_param(char *name, Type *type);
 Symbol *symtab_lookup(char *name);
