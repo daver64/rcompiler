@@ -13,17 +13,19 @@ all the way down to a runnable ELF binary.
   plain C with no external parser/lexer-generator tools.
 - Single-pass, Crenshaw-style: there's no separate AST — expressions and
   statements emit assembly directly as they're parsed.
-- Targets **x86-64 Linux**, emitting Intel-syntax assembly for
-  **FASM 1.7x**, which is then invoked to produce a final ELF executable or
-  relocatable object file.
+- Targets **x86-64 Linux** (and portable to other x86-64 environments),
+  emitting Intel-syntax assembly for **FASM 1.7x**, which is then invoked to
+  produce a standalone ELF executable or a relocatable object file (`.o`).
 - A genuinely useful subset of C: functions (with recursion), `int`/`char`
   types, pointers, arrays, structs, global variables, `if`/`else`/`while`/
   `for`/`break`/`continue`/`return`, string literals, and a simple
   preprocessor (`#include`, `#define`).
-- It is **not** a standards-compliant C compiler. There's no libc linkage,
-  no floating point, no `union`/`enum`/`typedef`, no function-like macros or
-  conditional compilation (`#ifdef`), no bitfields, and struct-by-value
-  passing is only correct for structs up to 8 bytes. See [Limitations](#limitations).
+- Object files (`-c`) are standard ELF64 with proper symbol aliasing and PLT
+  calls, making them linkable with standard `gcc` (PIE-compatible) or custom OS linkers.
+- It is **not** a standards-compliant C compiler. There's no floating point,
+  no `union`/`enum`/`typedef`, no function-like macros or conditional
+  compilation (`#ifdef`), no bitfields, and struct-by-value passing is only
+  correct for structs up to 8 bytes. See [Limitations](#limitations).
 
 ## Why FASM?
 
@@ -71,13 +73,24 @@ writes an intermediate `out.asm` file in the current directory and invokes
 ### Object files (`-c`)
 
 `-c` produces a genuine relocatable ELF64 object (inspectable with `file` /
-`objdump -t`): every function/global you define becomes a `public` symbol,
-and any function you call but don't define in that file (including the
-built-in `print`/`print_int`, which only get bundled into standalone
-executables) becomes an `extrn` symbol. There is currently no linking step
-that combines multiple `.o` files (plus a runtime and `_start`) into a final
-executable — `-c` is mainly useful for inspecting codegen output or feeding
-into an external linker yourself.
+`objdump -t`). Using FASM's symbol alias syntax (`public u_name as 'name'`,
+`extrn 'name' as _name`, and `name = PLT _name`), all symbols are exported
+and imported using standard unadorned C names, and external function calls
+generate `R_X86_64_PLT32` relocations. This makes object files fully
+compatible with Position-Independent Executables (PIE).
+
+You can link `.o` files directly with `gcc` (or `ld` on your own OS) without
+needing `-no-pie`:
+
+```sh
+./compile -c myprog.c -o myprog.o
+gcc myprog.o -o myprog
+./myprog
+```
+
+External libc functions (like `puts`, `printf`, `malloc`, `free`, etc.) can
+be declared in your C source as prototypes and called directly when linked
+with libc.
 
 ### Builtin runtime
 
@@ -145,16 +158,18 @@ Makefile        builds ./compile from src/*.c
 
 This is intentionally a small subset of C. Notably missing:
 
-- No standard library / libc linkage (only the `print`/`print_int` builtins).
+- Standalone executable mode has no standard library / libc linkage (uses
+  built-in raw syscall `print`/`print_int` functions). For libc access, compile
+  to an object file (`-c`) and link with `gcc` or your target OS libc.
 - No `union`, `enum`, or `typedef`.
 - No floating point, no variadic functions, no bitfields.
 - Function calls support at most 6 arguments (SysV register-only convention,
   no stack-passed arguments).
-- No function-like macros or conditional compilation in the preprocessor.
+- No function-like macros or conditional compilation (`#ifdef`) in the preprocessor.
 - Struct-by-value parameter/return passing is only correct for structs that
-  fit in 8 bytes.
-- No real multi-file linking — `-c` produces valid objects, but nothing ties
-  multiple objects (plus a runtime/`_start`) together into one executable.
+  fit in 8 bytes (pass structs by pointer for larger structs).
+- No multi-file link orchestration built into the compiler driver — compile each
+  file with `-c` and link using `gcc` or your custom linker.
 
 ## License
 

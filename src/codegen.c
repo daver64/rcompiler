@@ -1106,15 +1106,18 @@ void codegen_emit_globals()
 // Emits `public` for every symbol this translation unit defines, and (in
 // object-file mode) `extrn` for every function called but not defined here
 // (prototypes-only, or builtins like print/print_int supplied elsewhere).
+// Uses FASM alias syntax (`public internal as 'external'`, `extrn 'external' as _external`,
+// and `internal = PLT _external`) so calls to external symbols use R_X86_64_PLT32
+// relocations compatible with Position-Independent Executables (PIE).
 void codegen_emit_linkage(int object_mode)
 {
     for(NameList *n = defined_functions; n; n = n->next)
     {
-        emit("public %s\n", asm_name(n->name));
+        emit("public %s as '%s'\n", asm_name(n->name), n->name);
     }
     for(GlobalInit *g = global_list; g; g = g->next)
     {
-        emit("public %s\n", asm_name(g->name));
+        emit("public %s as '%s'\n", asm_name(g->name), g->name);
     }
     if(object_mode)
     {
@@ -1122,7 +1125,8 @@ void codegen_emit_linkage(int object_mode)
         {
             if(!namelist_contains(defined_functions, n->name))
             {
-                emit("extrn %s\n", asm_name(n->name));
+                emit("extrn '%s' as _%s\n", n->name, asm_name(n->name));
+                emit("%s = PLT _%s\n", asm_name(n->name), asm_name(n->name));
             }
         }
     }

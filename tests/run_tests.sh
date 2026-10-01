@@ -51,14 +51,25 @@ done
 echo "----"
 echo "$pass passed, $fail failed"
 
-echo "Checking -c object-file mode..."
-if ./compile -c tests/cases/01_arithmetic.c -o "$tmpdir/01_arithmetic.o" > "$tmpdir/objmode.log" 2>&1 \
-    && file "$tmpdir/01_arithmetic.o" | grep -q "relocatable"; then
-    echo "PASS object-file mode"
+echo "Checking -c object-file mode & default gcc PIE linking..."
+cat > "$tmpdir/pie_test.c" << 'EOF'
+int puts(char *s);
+int add(int a, int b) { return a + b; }
+int main() {
+    puts("PIE OK");
+    return add(40, 2);
+}
+EOF
+if ./compile -c "$tmpdir/pie_test.c" -o "$tmpdir/pie_test.o" > "$tmpdir/objmode.log" 2>&1 \
+    && file "$tmpdir/pie_test.o" | grep -q "relocatable" \
+    && gcc "$tmpdir/pie_test.o" -o "$tmpdir/pie_test" > "$tmpdir/pie.log" 2>&1 \
+    && [ "$("$tmpdir/pie_test")" = "PIE OK" ]; then
+    echo "PASS object-file mode & PIE link"
     pass=$((pass + 1))
 else
-    echo "FAIL object-file mode"
-    cat "$tmpdir/objmode.log"
+    echo "FAIL object-file mode & PIE link"
+    cat "$tmpdir/objmode.log" 2>/dev/null
+    cat "$tmpdir/pie.log" 2>/dev/null
     fail=$((fail + 1))
 fi
 

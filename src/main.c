@@ -177,6 +177,10 @@ int main(int argc, char *argv[])
     {
         fprintf(out, "print_int_buf: rb 24\n");
     }
+    if(object_mode)
+    {
+        fprintf(out, "\nsection '.note.GNU-stack'\n");
+    }
     fclose(out);
 
     char command[1024];
