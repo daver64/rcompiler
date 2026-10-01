@@ -72,15 +72,13 @@ writes an intermediate `out.asm` file in the current directory and invokes
 
 ### Object files (`-c`)
 
-`-c` produces a genuine relocatable ELF64 object (inspectable with `file` /
-`objdump -t`). Using FASM's symbol alias syntax (`public u_name as 'name'`,
-`extrn 'name' as _name`, and `name = PLT _name`), all symbols are exported
-and imported using standard unadorned C names, and external function calls
-generate `R_X86_64_PLT32` relocations. This makes object files fully
-compatible with Position-Independent Executables (PIE).
+`-c` produces a genuine relocatable ELF64 object (`.o`, inspectable with `file` / `objdump -t`).
+Using FASM's symbol alias syntax (`public u_name as 'name'`, `extrn 'name' as _name`,
+and `name = PLT _name`), symbols are exported and imported using standard unadorned
+C names, and external function calls generate `R_X86_64_PLT32` relocations.
+This makes object files fully compatible with Position-Independent Executables (PIE).
 
-You can link `.o` files directly with `gcc` (or `ld` on your own OS) without
-needing `-no-pie`:
+You can link `.o` files directly with `gcc` (or `ld` on your own OS) without needing `-no-pie`:
 
 ```sh
 ./compile -c myprog.c -o myprog.o
@@ -88,21 +86,139 @@ gcc myprog.o -o myprog
 ./myprog
 ```
 
-External libc functions (like `puts`, `printf`, `malloc`, `free`, etc.) can
-be declared in your C source as prototypes and called directly when linked
-with libc.
+## Using Standard C Library (libc) & External Libraries
 
-### Builtin runtime
+Because standard system header files (such as `<stdio.h>` or `<stdlib.h>`) are tens of
+thousands of lines long and rely on compiler-specific GCC/Clang extensions, `rcompiler`
+does not parse standard glibc headers directly.
 
-There's no libc. Four tiny syscall-based builtins are always available to your
-C code, implemented directly in hand-written asm and bundled into every
-standalone executable:
+Instead, you simply **declare the prototypes** of the libc or third-party functions you
+wish to call. When compiled with `-c` and linked with `gcc` (or your OS linker), standard
+libraries are linked automatically.
+
+### Common Libc Function Declarations
+
+You can place these prototypes directly at the top of your `.c` file or put them in a
+custom header (e.g. `#include "libc.h"`):
+
+#### Memory Allocation (`<stdlib.h>`)
+```c
+void *malloc(int size);
+void free(void *ptr);
+void *calloc(int nmemb, int size);
+void *realloc(void *ptr, int size);
+```
+
+#### Console I/O & Formatted Output (`<stdio.h>`)
+```c
+int puts(char *s);
+int putchar(int c);
+int getchar();
+int printf(char *fmt, ...); // Supports integer, string, pointer, and float/double arguments
+```
+
+*Note on `printf` and varargs:* The x86-64 System V ABI requires the `%al` register to store
+the count of floating-point arguments passed in SSE registers when calling variable-argument
+functions. `rcompiler` calculates and sets this automatically, so `printf("%s: %f\n", label, val)`
+formats floating-point values properly.
+
+#### File I/O (`<stdio.h>`)
+```c
+void *fopen(char *path, char *mode);
+int fclose(void *stream);
+int fgetc(void *stream);
+int fputc(int c, void *stream);
+int fread(void *ptr, int size, int nmemb, void *stream);
+int fwrite(void *ptr, int size, int nmemb, void *stream);
+```
+
+#### String & Memory Utilities (`<string.h>`)
+```c
+int strlen(char *s);
+int strcmp(char *s1, char *s2);
+char *strcpy(char *dest, char *src);
+char *strcat(char *dest, char *src);
+void *memset(void *s, int c, int n);
+void *memcpy(void *dest, void *src, int n);
+```
+
+#### Math Library (`<math.h>`, link with `-lm`)
+```c
+double sqrt(double x);
+double sin(double x);
+double cos(double x);
+double tan(double x);
+double pow(double x, double y);
+double floor(double x);
+double ceil(double x);
+```
+
+#### Process Control (`<stdlib.h>`)
+```c
+void exit(int status);
+int system(char *command);
+```
+
+### Complete Libc Example
+
+Here is a complete program demonstrating dynamic memory (`malloc`/`free`), string inspection (`strlen`),
+formatted printing (`printf`), and floating-point math (`sqrt`):
 
 ```c
-int print(char *s);       // writes a null-terminated string to stdout
-int print_int(int n);     // writes a (possibly negative) decimal integer
-int print_float(float f); // writes a 32-bit float
-int print_double(double d); // writes a 64-bit double
+// demo_libc.c
+int printf(char *fmt, ...);
+void *malloc(int size);
+void free(void *ptr);
+int strlen(char *s);
+double sqrt(double x);
+
+int main() {
+    char *greeting = "Hello, libc!";
+    int len = strlen(greeting);
+
+    // Allocate memory dynamically
+    char *buffer = malloc(len + 1);
+    int i;
+    for (i = 0; i <= len; i = i + 1) {
+        buffer[i] = greeting[i];
+    }
+
+    double val = 49.0;
+    double root = sqrt(val);
+
+    // Formatted output with strings, integers, and doubles
+    printf("Message: %s (length %d)\n", buffer, len);
+    printf("Square root of %f is %f\n", val, root);
+
+    free(buffer);
+    return 0;
+}
+```
+
+To compile and link:
+```sh
+./compile -c demo_libc.c -o demo_libc.o
+gcc demo_libc.o -lm -o demo_libc
+./demo_libc
+```
+
+Output:
+```
+Message: Hello, libc! (length 12)
+Square root of 49.000000 is 7.000000
+```
+
+### Builtin Runtime (Standalone Mode)
+
+When compiling directly to a standalone executable (without `-c`), there is no libc
+linked. Four lightweight syscall-based builtins are implemented in pure assembly and
+automatically provided:
+
+```c
+int print(char *s);         // writes a null-terminated string to stdout
+int print_int(int n);       // writes a (possibly negative) decimal integer
+int print_float(float f);   // writes a 32-bit float (up to 6 decimal places)
+int print_double(double d); // writes a 64-bit double (up to 6 decimal places)
 ```
 
 ### Preprocessor
