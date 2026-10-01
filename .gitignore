@@ -1,5 +1,5 @@
 /.vscode
 /compile
 /out.asm
-/example.elf
+/example
 /compile.d
