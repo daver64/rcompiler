@@ -1438,6 +1438,21 @@ void parse_statement()
         emit("    jmp .L%d\n", loop_stack->continue_label);
         return;
     }
+    if(token_type == TOKEN_KEYWORD && token_keyword == KEYWORD_ASM)
+    {
+        char *asm_code = c_read_asm_block();
+        if(!asm_code)
+        {
+            codegen_error("expected '{' after 'asm'");
+        }
+        emit("%s\n", asm_code);
+        free(asm_code);
+        if(is_op(";"))
+        {
+            next_token();
+        }
+        return;
+    }
     if(is_type_start())
     {
         parse_declaration();
@@ -1693,6 +1708,22 @@ void parse_translation_unit()
 {
     while(token_type != TOKEN_EOF)
     {
+        if(token_type == TOKEN_KEYWORD && token_keyword == KEYWORD_ASM)
+        {
+            char *asm_code = c_read_asm_block();
+            if(!asm_code)
+            {
+                codegen_error("expected '{' after 'asm'");
+            }
+            emit("%s\n", asm_code);
+            free(asm_code);
+            if(is_op(";"))
+            {
+                next_token();
+            }
+            continue;
+        }
+
         Type *base = parse_base_type();
         if(!base)
         {

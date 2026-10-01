@@ -10,6 +10,7 @@
 // - Floating point: float & double, arithmetic, comparisons, int casts
 // - Pointers & arrays: indexing, address-of (&), dereference (*), pointer arithmetic
 // - Structs: declaration, member access (.), pointer access (->)
+// - Inline assembly: asm { ... } blocks for low-level OS operations
 // - Globals: initialized & zero-initialized
 // - String literals with escape sequences
 // - Builtin runtime: print(), print_int(), print_float(), print_double()
@@ -101,6 +102,40 @@ float average3(float a, float b, float c) {
     return (a + b + c) / 3.0;
 }
 
+// --- inline assembly (useful for OS development: flags, CPUID, port I/O, control regs) ---
+
+int cpu_has_cpuid() {
+    int supported = 0;
+    asm {
+        ; Check if CPUID is supported by attempting to flip the ID bit (bit 21) in EFLAGS
+        pushfq
+        pop rax
+        mov ecx, eax
+        xor eax, 0x00200000
+        push rax
+        popfq
+        pushfq
+        pop rax
+        push rcx
+        popfq
+        xor eax, ecx
+        test eax, 0x00200000
+        jz .no_cpuid
+        mov dword [rbp-4], 1
+    .no_cpuid:
+    }
+    return supported;
+}
+
+int read_tsc_low() {
+    int tsc = 0;
+    asm {
+        rdtsc
+        mov [rbp-4], eax
+    }
+    return tsc;
+}
+
 // --- entry point ---
 
 int main() {
@@ -163,6 +198,17 @@ int main() {
     struct Point *pp = &pt;
     pp->x = pp->x + 1;
     print_int(manhattan_distance(pp));
+    print("\n");
+
+    print("== inline assembly (asm {}) ==\n");
+    if (cpu_has_cpuid()) {
+        print("CPUID supported: YES\n");
+    } else {
+        print("CPUID supported: NO\n");
+    }
+    int tsc = read_tsc_low();
+    print("RDTSC low 32 bits: ");
+    print_int(tsc);
     print("\n");
 
     print("== globals ==\n");

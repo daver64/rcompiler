@@ -221,6 +221,67 @@ int print_float(float f);   // writes a 32-bit float (up to 6 decimal places)
 int print_double(double d); // writes a 64-bit double (up to 6 decimal places)
 ```
 
+## Inline Assembly (`asm { ... }`)
+
+`rcompiler` supports verbatim Intel-syntax inline assembly using `asm { ... }` (as well as
+`__asm { ... }` and `__asm__ { ... }`). Because the compiler targets FASM directly, you have
+unrestricted access to any x86/x86-64 instructions, CPU control registers, and FASM directives.
+
+This is particularly useful when developing an operating system (bootloader, kernel, interrupt
+handlers, descriptor tables, port I/O, paging, and CPU state inspection):
+
+### In Statement Scope
+Inside function bodies, `asm { ... }` blocks can read and write function parameters and local
+variables via their stack offsets relative to `rbp`:
+
+```c
+// Port I/O helper
+void outb(int port, int val) {
+    asm {
+        ; port is at [rbp-4], val is at [rbp-8]
+        mov edx, [rbp-4]
+        mov eax, [rbp-8]
+        out dx, al
+    }
+}
+
+// Read CPU timestamp counter
+int rdtsc_low() {
+    int tsc = 0;
+    asm {
+        rdtsc
+        mov [rbp-4], eax
+    }
+    return tsc;
+}
+
+// Disable and enable interrupts
+void disable_interrupts() {
+    asm { cli }
+}
+void enable_interrupts() {
+    asm { sti }
+}
+```
+
+### In Global / Top-Level Scope
+`asm { ... }` blocks can also be placed at top level in a file to emit raw assembly routines,
+interrupt service routines (ISRs), naked labels, segment/mode directives (like `use16` for
+real mode bootloader code), or custom tables:
+
+```c
+asm {
+    ; Naked interrupt handler
+    my_isr:
+        push rax
+        push rbx
+        ; ... handle interrupt ...
+        pop rbx
+        pop rax
+        iretq
+}
+```
+
 ### Preprocessor
 
 A minimal preprocessor runs before lexing:

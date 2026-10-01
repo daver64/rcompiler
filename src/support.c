@@ -42,7 +42,9 @@ Keyword keywords[] = {
     {"inline", KEYWORD_INLINE},
     {"noreturn", KEYWORD_NORETURN},
     {"alignas", KEYWORD_ALIGNAS},
-    {"asm", KEYWORD_ASM}
+    {"asm", KEYWORD_ASM},
+    {"__asm", KEYWORD_ASM},
+    {"__asm__", KEYWORD_ASM}
 };
 
 int c_get_next_char()
@@ -327,6 +329,124 @@ char *c_read_number()
         token_type = TOKEN_NUMBER;
     }
     return buffer;
+}
+
+// Reads the verbatim content between an opening '{' and its matching '}',
+// returning a newly allocated buffer (caller must free()).
+// Accurately tracks brace nesting while ignoring braces inside quotes or comments.
+char *c_read_asm_block()
+{
+    c_skip_whitespace();
+    if(look != '{')
+    {
+        return NULL;
+    }
+    c_get_next_char(); // consume '{'
+
+    char *buf = NULL;
+    size_t size = 0;
+    FILE *mem = open_memstream(&buf, &size);
+    int depth = 1;
+
+    while(depth > 0 && look != EOF)
+    {
+        if(look == '"' || look == '\'')
+        {
+            int quote = look;
+            fputc(look, mem);
+            c_get_next_char();
+            while(look != EOF && look != quote)
+            {
+                if(look == '\\')
+                {
+                    fputc(look, mem);
+                    c_get_next_char();
+                }
+                if(look != EOF)
+                {
+                    fputc(look, mem);
+                    c_get_next_char();
+                }
+            }
+            if(look == quote)
+            {
+                fputc(look, mem);
+                c_get_next_char();
+            }
+        }
+        else if(look == ';')
+        {
+            // FASM line comment
+            while(look != EOF && look != '\n')
+            {
+                fputc(look, mem);
+                c_get_next_char();
+            }
+            if(look == '\n')
+            {
+                fputc(look, mem);
+                c_get_next_char();
+            }
+        }
+        else if(look == '/' && c_peek_char() == '/')
+        {
+            // C line comment
+            while(look != EOF && look != '\n')
+            {
+                fputc(look, mem);
+                c_get_next_char();
+            }
+            if(look == '\n')
+            {
+                fputc(look, mem);
+                c_get_next_char();
+            }
+        }
+        else if(look == '/' && c_peek_char() == '*')
+        {
+            // C block comment
+            fputc(look, mem);
+            c_get_next_char();
+            fputc(look, mem);
+            c_get_next_char();
+            while(!(look == '*' && c_peek_char() == '/') && look != EOF)
+            {
+                fputc(look, mem);
+                c_get_next_char();
+            }
+            if(look == '*')
+            {
+                fputc(look, mem);
+                c_get_next_char();
+                fputc(look, mem);
+                c_get_next_char();
+            }
+        }
+        else if(look == '{')
+        {
+            depth++;
+            fputc(look, mem);
+            c_get_next_char();
+        }
+        else if(look == '}')
+        {
+            depth--;
+            if(depth > 0)
+            {
+                fputc(look, mem);
+            }
+            c_get_next_char();
+        }
+        else
+        {
+            fputc(look, mem);
+            c_get_next_char();
+        }
+    }
+    fflush(mem);
+    fclose(mem);
+    next_token(); // prime the next token
+    return buf;
 }
 
 // Reads a 1 or 2 char operator/punctuation token, leaving 'look' on the char after it.

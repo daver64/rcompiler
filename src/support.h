@@ -87,6 +87,7 @@ char *c_read_string();
 char *c_read_char();
 char *c_read_identifier();
 char *c_read_number();
+char *c_read_asm_block();
 void c_read_operator();
 Keyword *c_lookup_keyword(char *str);
 int c_is_keyword(char *str);
